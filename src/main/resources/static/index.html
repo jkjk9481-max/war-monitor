@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>카버린 전황 모니터링</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { display: flex; height: 100vh; background: #0a0a0a; color: white; font-family: monospace; }
+        #map { flex: 1; height: 100vh; }
+        #panel { width: 320px; background: #111; padding: 16px; overflow-y: auto; border-left: 1px solid #333; }
+        #panel h3 { color: #ff4444; margin-bottom: 10px; border-bottom: 1px solid #333; padding-bottom: 6px; }
+        .log-item { padding: 8px; margin: 4px 0; background: #1a1a1a; border-left: 3px solid #ff4444; font-size: 12px; }
+        .person-item { padding: 8px; margin: 4px 0; background: #1a1a1a; font-size: 12px; }
+        .ALIVE { border-left: 3px solid green; }
+        .DEAD { border-left: 3px solid red; }
+        .HOSTAGE { border-left: 3px solid orange; }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+    <h3>공격 로그</h3>
+    <div id="attack-log"></div>
+
+    <h3 style="margin-top: 20px;">인물 현황</h3>
+    <div id="person-list"></div>
+
+    <h3 style="margin-top: 20px;">공격 등록</h3>
+    <select id="facility-select" style="width:100%; margin-bottom:8px; padding:6px; background:#1a1a1a; color:white; border:1px solid #333;">
+        <option value="">시설 선택</option>
+    </select>
+
+    <select id="attack-type-select" style="width:100%; margin-bottom:8px; padding:6px; background:#1a1a1a; color:white; border:1px solid #333;">
+        <option value="BOMBING">폭격</option>
+        <option value="INFILTRATION">침투</option>
+        <option value="DESTRUCTION">파괴</option>
+        <option value="CYBER">사이버 공격</option>
+    </select>
+
+    <button onclick="registerAttack()" style="width:100%; padding:8px; background:#ff4444; color:white; border:none; cursor:pointer;">
+        공격 등록
+    </button>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sockjs-client/dist/sockjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/stompjs/lib/stomp.min.js"></script>
+
+<script>
+    const map = L.map('map').setView([47.0105, 28.8638], 12);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; CartoDB'
+    }).addTo(map);
+
+    function getColor(status) {
+        if (status === 'NORMAL') return 'green';
+        if (status === 'UNDER_ATTACK') return 'red';
+        if (status === 'OCCUPIED') return 'black';
+        if (status === 'DESTROYED') return 'gray';
+        return 'blue';
+    }
+
+    function loadFacilitySelect() {
+        fetch('/api/facilities')
+            .then(res => res.json())
+            .then(facilities => {
+                const select = document.getElementById('facility-select');
+                select.innerHTML = '<option value="">시설 선택</option>';
+                facilities.forEach(facility => {
+                    select.innerHTML += `<option value="${facility.id}">${facility.name}</option>`;
+                });
+            });
+    }
+
+    function registerAttack() {
+        const facilityId = document.getElementById('facility-select').value;
+        const attackType = document.getElementById('attack-type-select').value;
+
+        if (!facilityId) {
+            alert('시설을 선택해 주세요.');
+            return;
+        }
+
+        fetch('/api/attacks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ facilityId: facilityId, attackType: attackType })
+        });
+    }
+
+    function refreshMarkers() {
+        fetch('/api/facilities')
+            .then(res => res.json())
+            .then(facilities => {
+                map.eachLayer(layer => {
+                    if (layer instanceof L.CircleMarker) map.removeLayer(layer);
+                });
+                facilities.forEach(facility => {
+                    L.circleMarker([facility.latitude, facility.longitude], {
+                        color: getColor(facility.status),
+                        fillColor: getColor(facility.status),
+                        fillOpacity: 0.8,
+                        radius: 10
+                    })
+                        .addTo(map)
+                        .bindPopup(facility.name + '<br>' + facility.status);
+                });
+            });
+    }
+
+    function loadPersons() {
+        fetch('/api/persons')
+            .then(res => res.json())
+            .then(persons => {
+                const list = document.getElementById('person-list');
+                list.innerHTML = '';
+                persons.forEach(person => {
+                    list.innerHTML += `
+                        <div class="person-item ${person.personStatus}">
+                            ${person.name} - ${person.role}<br>
+                            <small>${person.side} - ${person.personStatus}</small>
+                        </div>`;
+                });
+            });
+    }
+
+    function addAttackLog(attack) {
+        const log = document.getElementById('attack-log');
+        const time = new Date().toLocaleTimeString();
+        log.innerHTML = `
+            <div class="log-item">
+                ${time}<br>
+                ${attack.facilityName} - ${attack.attackType}
+            </div>` + log.innerHTML;
+    }
+
+    const socket = new SockJS('/ws');
+    const stompClient = Stomp.over(socket);
+
+    stompClient.connect({}, function() {
+        console.log('WebSocket connected');
+        stompClient.subscribe('/topic/person', function() {
+           loadPersons();
+        });
+        stompClient.subscribe('/topic/attack', function(message) {
+            const attack = JSON.parse(message.body);
+            addAttackLog(attack);
+            refreshMarkers();
+        });
+    });
+
+    loadFacilitySelect();
+    refreshMarkers();
+    loadPersons();
+</script>
+
+</body>
+</html>
