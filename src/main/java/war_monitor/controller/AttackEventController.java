@@ -4,7 +4,6 @@ import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 import war_monitor.dto.AttackEventRequestDto;
 import war_monitor.dto.AttackEventResponseDto;
-import war_monitor.entity.AttackEvent;
 import war_monitor.service.AttackEventService;
 
 import java.util.List;
@@ -20,12 +19,12 @@ public class AttackEventController {
     }
 
     @GetMapping
-    public List<AttackEvent> getAllAttacks(){
+    public List<AttackEventResponseDto> getAllAttacks(){
         return attackEventService.getAllAttackEvents();
     }
 
     @GetMapping("/{id}")
-    public AttackEvent getAttack(@PathVariable Long id){
+    public AttackEventResponseDto getAttack(@PathVariable Long id){
         return attackEventService.getAttackEventById(id);
     }
 

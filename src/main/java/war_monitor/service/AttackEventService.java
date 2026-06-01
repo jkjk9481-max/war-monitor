@@ -28,13 +28,19 @@ public class AttackEventService{
         this.messagingTemplate = messagingTemplate;
     }
 
-    public List<AttackEvent> getAllAttackEvents(){
-        return attackEventRepository.findAll();
+    public List<AttackEventResponseDto> getAllAttackEvents(){
+        return attackEventRepository.findAll()
+                .stream()
+                .map(attackEvent -> toResponseDto(attackEvent))
+                // 목록 안에 있는 AttackEvent 하나하나를 toResponseDto 메서드에 넣어서 AttackEventResponseDto로 바꾼다
+                .toList();
     }
 
-    public AttackEvent getAttackEventById(Long id){
-        return attackEventRepository.findById(id)
+    public AttackEventResponseDto getAttackEventById(Long id){
+        AttackEvent attackEvent = attackEventRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("해당 시설 공격 타깃이 아닙니다"));
+
+        return toResponseDto(attackEvent);
     }
 
     @Transactional
@@ -53,18 +59,28 @@ public class AttackEventService{
         facilityRepository.save(facility);
 
         // 4.ResponseDto으로 변환해서 반환
-        AttackEventResponseDto response = new AttackEventResponseDto(
-                saved.getId(),
-                saved.getFacility().getName() ,
-                saved.getAttackType() ,
-                saved.getAttackTime() ,
-                saved.getFacility().getStatus()
-        );
+        AttackEventResponseDto response = toResponseDto(saved);
 
         // 5. WebSocket으로 알림 보내기
         messagingTemplate.convertAndSend("/topic/attack" , response);
 
         // 6. 반환
         return  response;
+    }
+
+    private AttackEventResponseDto toResponseDto(AttackEvent attackEvent){
+        return new AttackEventResponseDto(
+                attackEvent.getId(),
+                attackEvent.getFacility().getName(),
+                attackEvent.getAttackType(),
+                attackEvent.getAttackTime(),
+                attackEvent.getFacility().getStatus()
+
+                //private 응답DTO toResponseDto(엔티티 entity) {
+                //    return new 응답DTO(
+                //        entity에서 필요한 값 꺼내기
+                //    );
+                //}
+        );
     }
 }
