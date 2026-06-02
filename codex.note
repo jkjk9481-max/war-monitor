@@ -124,6 +124,504 @@ DTO는 Entity가 아니라 요청 데이터를 전달하기 위한 객체이다.
   예를 들어 BOMBING은 UNDER_ATTACK, INFILTRATION은 OCCUPIED, DESTRUCTION은 DESTROYED 상태로 이어진다.
 ```
 
+## 지금까지 실제로 개선한 내용 정리
+
+### 1. AttackEventRequestDto 입력값 검증 추가
+
+목표:
+
+`POST /api/attacks` 요청에서 필수값이 빠졌을 때 Service까지 내려가기 전에 400 Bad Request로 막는 것이다.
+
+수정한 내용:
+
+- `build.gradle`에 `spring-boot-starter-validation` 의존성을 추가했다.
+- `AttackEventRequestDto`의 `facilityId`에 `@NotNull`을 붙였다.
+- `AttackEventRequestDto`의 `attackType`에 `@NotNull`을 붙였다.
+- `AttackEventController.createAttack()`의 `@RequestBody` 앞에 `@Valid`를 붙였다.
+
+이유:
+
+- `facilityId`가 없으면 어떤 시설을 공격할지 서버가 알 수 없다.
+- `attackType`이 없으면 어떤 공격인지 알 수 없고, 시설 상태를 어떻게 바꿔야 하는지도 알 수 없다.
+- 잘못된 요청은 서버 내부 로직으로 내려가기 전에 Controller 단계에서 막는 것이 좋다.
+
+동작 흐름:
+
+```text
+Postman 요청
+-> AttackEventController.createAttack()
+-> @Valid가 AttackEventRequestDto 검증
+-> @NotNull 위반 시 MethodArgumentNotValidException 발생
+-> GlobalExceptionHandler가 400 응답 반환
+```
+
+예시:
+
+```json
+{
+  "facilityId": null,
+  "attackType": "BOMBING"
+}
+```
+
+기대 응답:
+
+```json
+{
+  "status": 400,
+  "message": "facilityId는 필수입니다."
+}
+```
+
+### 2. 검증 실패 예외를 400으로 처리
+
+목표:
+
+DTO 검증 실패가 발생했을 때 500이 아니라 400 Bad Request로 응답하게 만드는 것이다.
+
+수정한 내용:
+
+- `GlobalExceptionHandler`에 `MethodArgumentNotValidException` 처리 메서드를 추가했다.
+- 응답 형식은 기존 `NotFoundException`과 비슷하게 `status`, `message`를 담은 Map으로 맞췄다.
+
+이유:
+
+- 필수값 누락은 서버 오류가 아니라 클라이언트 요청 오류이다.
+- 그래서 HTTP 상태 코드는 500이 아니라 400이 맞다.
+
+정리:
+
+```text
+MethodArgumentNotValidException
+= JSON이 DTO로 변환된 뒤, @NotNull 같은 Bean Validation에서 실패했을 때 발생
+```
+
+### 3. enum에 없는 attackType 값 처리
+
+목표:
+
+`attackType`에 `"WRONG"`처럼 `AttackType` enum에 없는 값이 들어왔을 때 500이 아니라 400 Bad Request로 응답하게 만드는 것이다.
+
+수정한 내용:
+
+- `GlobalExceptionHandler`에 `HttpMessageNotReadableException` 처리 메서드를 추가했다.
+- 응답 메시지는 `"attackType 값이 올바르지 않습니다."` 형태로 정리했다.
+
+이유:
+
+- `attackType`은 `AttackType` enum 타입이다.
+- enum에 없는 문자열은 DTO로 변환하는 단계에서 실패한다.
+- 이 경우는 `@NotNull` 검증 실패가 아니라 JSON 변환 실패이다.
+
+동작 차이:
+
+```text
+attackType: null
+-> DTO 변환 성공
+-> @NotNull 검증 실패
+-> MethodArgumentNotValidException
+
+attackType: "WRONG"
+-> AttackType enum으로 변환 실패
+-> HttpMessageNotReadableException
+```
+
+면접 설명:
+
+```text
+attackType이 null인 경우에는 DTO 변환은 성공하지만 Bean Validation에서 실패합니다.
+반면 enum에 없는 문자열이 들어오면 DTO 변환 과정에서 실패하기 때문에 HttpMessageNotReadableException을 전역 예외 처리에서 잡아 400으로 응답하도록 했습니다.
+```
+
+### 4. AttackEvent 조회 API에서 Entity 직접 반환 줄이기
+
+목표:
+
+`GET /api/attacks`, `GET /api/attacks/{id}`가 `AttackEvent` Entity를 직접 반환하지 않고 `AttackEventResponseDto`를 반환하게 만드는 것이다.
+
+수정한 내용:
+
+- `AttackEventService.getAllAttackEvents()` 반환 타입을 `List<AttackEventResponseDto>`로 변경했다.
+- `AttackEventService.getAttackEventById()` 반환 타입을 `AttackEventResponseDto`로 변경했다.
+- `AttackEventController.getAllAttacks()` 반환 타입을 `List<AttackEventResponseDto>`로 변경했다.
+- `AttackEventController.getAttack()` 반환 타입을 `AttackEventResponseDto`로 변경했다.
+- `AttackEvent`를 `AttackEventResponseDto`로 바꾸는 `toResponseDto()` 메서드를 만들었다.
+
+이유:
+
+- Entity를 그대로 반환하면 DB 구조가 API 응답에 직접 노출된다.
+- Entity 필드가 바뀌면 API 응답도 같이 흔들릴 수 있다.
+- 연관관계가 많아지면 JSON 순환참조 문제가 생길 수 있다.
+- 클라이언트에게 필요한 필드만 골라서 응답하는 것이 좋다.
+
+변경 전:
+
+```text
+DB -> AttackEvent Entity -> Controller -> 클라이언트
+```
+
+변경 후:
+
+```text
+DB -> AttackEvent Entity -> AttackEventResponseDto -> Controller -> 클라이언트
+```
+
+### 5. toResponseDto 메서드의 의미
+
+역할:
+
+```text
+AttackEvent Entity를 클라이언트에게 보여줄 AttackEventResponseDto로 바꾸는 메서드
+```
+
+응답에 담는 값:
+
+- 공격 이벤트 id
+- 시설 이름
+- 공격 타입
+- 공격 시간
+- 공격 후 시설 상태
+
+왜 따로 만들었는가:
+
+- `POST /api/attacks` 응답에서도 DTO 변환이 필요하다.
+- `GET /api/attacks` 응답에서도 DTO 변환이 필요하다.
+- `GET /api/attacks/{id}` 응답에서도 DTO 변환이 필요하다.
+- 같은 변환 코드를 여러 곳에 반복하지 않기 위해 메서드로 분리했다.
+
+정리:
+
+```text
+createAttackEvent()
+= 공격 등록 전체 로직
+
+toResponseDto()
+= 서버 내부 Entity를 사용자 응답용 DTO로 바꾸는 로직
+```
+
+### 6. 지금까지 확인한 것
+
+- Postman에서 `facilityId: null` 요청 시 400 응답 확인
+- Postman에서 `attackType: null` 요청 시 400 응답 확인
+- Postman에서 `attackType: "WRONG"` 요청 시 400 응답 확인
+- Gradle 테스트 실행 시 최종적으로 `BUILD SUCCESSFUL` 확인
+
+중간에 Gradle이 `build/classes/java/main`, `build/resources/main` 산출물을 삭제하지 못하는 문제가 있었지만, 코드 오류가 아니라 빌드 산출물 정리 문제였다.
+
+## 중소기업 / 스타트업 백엔드 취업 기준으로 더 해야 할 것
+
+### 현재 프로젝트의 장점
+
+- Spring Boot 계층 구조가 있다.
+- Controller, Service, Repository, Entity 구조를 사용한다.
+- 단순 CRUD만 있는 것이 아니라 공격 등록 시 시설 상태가 바뀌는 도메인 흐름이 있다.
+- WebSocket을 사용해 실시간 알림을 보낸다.
+- DTO 검증과 전역 예외 처리 개선을 시작했다.
+- 공격 조회 API에서 Entity 직접 반환을 줄이기 시작했다.
+
+### 현재 프로젝트의 부족한 점
+
+- 테스트가 거의 없다.
+- `Facility`, `Person`, `Vehicle` API는 아직 Entity를 직접 반환한다.
+- 예외 응답이 Map 기반이라 장기적으로는 전용 ErrorResponse DTO가 좋다.
+- DB 설정에 로컬 계정과 비밀번호가 직접 들어 있다.
+- 개발 환경과 운영 환경 설정 분리가 약하다.
+- `data.sql`, README, 일부 한글 주석이 깨져 있다.
+- 실제 배포 경험이 아직 드러나지 않는다.
+- API 문서가 부족하다.
+- 인증/인가 기능은 없다.
+
+### 중소기업 / 스타트업에서 신입 백엔드에게 많이 기대하는 것
+
+팩트 기준으로, 신입에게 가장 많이 요구되는 것은 다음이다.
+
+1. Spring Boot로 기본 API를 만들 수 있는가
+2. DB와 JPA를 사용해 데이터를 저장하고 조회할 수 있는가
+3. Controller, Service, Repository 역할을 구분할 수 있는가
+4. DTO를 왜 쓰는지 설명할 수 있는가
+5. 예외 상황을 400, 404 같은 적절한 HTTP 상태 코드로 처리할 수 있는가
+6. 간단한 테스트를 작성할 수 있는가
+7. GitHub에 정리된 프로젝트를 보여줄 수 있는가
+8. README를 보고 프로젝트를 실행할 수 있게 만들 수 있는가
+9. 로컬뿐 아니라 배포 환경에서 실행해본 경험이 있는가
+10. 본인이 작성한 코드 흐름을 말로 설명할 수 있는가
+
+### 앞으로 프로젝트에서 우선적으로 해야 할 것
+
+#### 1. AttackEventService 테스트 추가
+
+가장 우선순위가 높다.
+
+테스트할 내용:
+
+- 존재하는 facilityId로 공격 등록 시 AttackEvent가 저장된다.
+- BOMBING 공격 등록 시 Facility 상태가 UNDER_ATTACK으로 바뀐다.
+- 없는 facilityId로 요청하면 NotFoundException이 발생한다.
+- WebSocket 전송 메서드가 호출된다.
+
+왜 필요한가:
+
+- 공격 등록은 이 프로젝트의 핵심 비즈니스 로직이다.
+- 포트폴리오에서 핵심 로직 테스트가 있으면 신뢰도가 올라간다.
+
+#### 2. 나머지 조회 API도 Response DTO로 분리
+
+대상:
+
+- `FacilityController`
+- `PersonController`
+- `VehicleController`
+
+왜 필요한가:
+
+- 공격 API만 DTO를 쓰고 나머지는 Entity를 직접 반환하면 구조가 일관되지 않다.
+- API 응답과 DB Entity를 분리하는 습관이 중요하다.
+
+#### 3. ErrorResponse DTO 만들기
+
+현재:
+
+```text
+Map<String, Object> body = new HashMap<>();
+```
+
+개선 방향:
+
+```text
+ErrorResponseDto(status, message)
+```
+
+왜 필요한가:
+
+- 예외 응답 형식을 통일할 수 있다.
+- Map보다 응답 구조가 명확하다.
+- 포트폴리오 코드로 더 깔끔해 보인다.
+
+#### 4. DB 설정 정리
+
+현재 문제:
+
+- `application.properties`에 PostgreSQL username, password가 직접 들어 있다.
+
+해야 할 것:
+
+- 개발용 H2 profile 추가
+- 운영용 PostgreSQL profile 분리
+- DB 접속 정보는 환경변수로 관리
+- README에 실행 방법 정리
+
+왜 필요한가:
+
+- 회사 코드에서는 DB 비밀번호를 소스에 직접 넣지 않는다.
+- 환경별 설정 분리는 실무에서 기본이다.
+
+#### 5. 깨진 한글과 초기 데이터 정리
+
+대상:
+
+- README
+- `data.sql`
+- Java 주석
+- 프론트 데모 화면 문구
+
+왜 필요한가:
+
+- 포트폴리오 첫인상에 직접 영향을 준다.
+- 프로젝트가 제대로 관리되고 있다는 느낌을 줘야 한다.
+
+#### 6. 배포 경험 만들기
+
+추천:
+
+- Render
+- Railway
+- Fly.io
+- AWS EC2
+
+해야 할 것:
+
+- Spring Boot 앱 배포
+- PostgreSQL 연결
+- 환경변수 설정
+- README에 배포 주소와 실행 방법 작성
+
+왜 필요한가:
+
+- 스타트업과 중소기업은 실제로 실행되는 프로젝트를 좋게 보는 경우가 많다.
+- 로컬에서만 되는 프로젝트보다 설득력이 높다.
+
+## 앞으로 공부해야 할 것
+
+### 1. Spring Boot 기본기
+
+반드시 알아야 할 것:
+
+- `@RestController`
+- `@Service`
+- `@Repository`
+- `@RequestMapping`
+- `@GetMapping`, `@PostMapping`, `@PatchMapping`
+- `@RequestBody`
+- `@PathVariable`
+- `@Valid`
+- `@Transactional`
+- `@RestControllerAdvice`
+- `ResponseEntity`
+
+목표:
+
+```text
+요청이 Controller로 들어와 Service를 거쳐 Repository로 가고, 다시 응답으로 돌아오는 흐름을 설명할 수 있어야 한다.
+```
+
+### 2. JPA 기본기
+
+공부할 것:
+
+- Entity
+- Repository
+- `@Id`
+- `@GeneratedValue`
+- `@Enumerated(EnumType.STRING)`
+- `@ManyToOne`
+- 영속성 컨텍스트
+- 변경 감지
+- 지연 로딩
+- N+1 문제 기본 개념
+
+목표:
+
+```text
+AttackEvent와 Facility의 관계를 설명할 수 있어야 한다.
+```
+
+### 3. HTTP와 REST API
+
+공부할 것:
+
+- GET, POST, PATCH, DELETE 차이
+- 200 OK
+- 201 Created
+- 400 Bad Request
+- 404 Not Found
+- 500 Internal Server Error
+- 요청 body와 응답 body
+- Request DTO와 Response DTO 차이
+
+목표:
+
+```text
+왜 잘못된 attackType 요청은 400인지 설명할 수 있어야 한다.
+```
+
+### 4. SQL과 DB
+
+공부할 것:
+
+- SELECT
+- INSERT
+- UPDATE
+- DELETE
+- JOIN
+- PK
+- FK
+- 인덱스 기본 개념
+- 트랜잭션 기본 개념
+
+목표:
+
+```text
+JPA만 쓰는 것이 아니라 실제 DB 테이블과 SQL이 어떻게 동작하는지도 이해해야 한다.
+```
+
+### 5. 테스트
+
+공부할 것:
+
+- JUnit 5
+- Mockito
+- Service 단위 테스트
+- Controller 테스트
+- given/when/then 패턴
+
+먼저 할 테스트:
+
+```text
+AttackEventService.createAttackEvent()
+```
+
+목표:
+
+```text
+핵심 비즈니스 로직을 테스트로 검증할 수 있어야 한다.
+```
+
+### 6. Git과 GitHub
+
+공부할 것:
+
+- commit
+- branch
+- pull request 기본 개념
+- `.gitignore`
+- README 작성
+- 커밋 메시지 작성법
+
+목표:
+
+```text
+프로젝트 변경 과정을 GitHub에서 볼 수 있게 관리해야 한다.
+```
+
+### 7. 배포와 환경변수
+
+공부할 것:
+
+- jar 빌드
+- 서버 실행
+- 환경변수
+- profile
+- PostgreSQL 외부 연결
+- 로그 확인
+
+목표:
+
+```text
+내 프로젝트를 로컬이 아닌 외부 서버에서 실행할 수 있어야 한다.
+```
+
+## 면접에서 이 프로젝트로 설명해야 할 핵심 문장
+
+```text
+이 프로젝트는 전쟁 상황 모니터링을 주제로 한 Spring Boot 백엔드 프로젝트입니다.
+시설, 인원, 차량 상태를 관리하고, 공격 이벤트가 등록되면 공격 타입에 따라 시설 상태가 자동으로 변경됩니다.
+또한 WebSocket을 통해 공격 발생 정보를 클라이언트에 실시간으로 전달합니다.
+```
+
+```text
+초기에는 Entity를 직접 반환하고 입력 검증이 부족했지만,
+AttackEventRequestDto에 Bean Validation을 적용하고,
+GlobalExceptionHandler에서 검증 실패와 enum 변환 실패를 400 Bad Request로 처리하도록 개선했습니다.
+또한 공격 조회 API는 Entity 직접 반환 대신 AttackEventResponseDto를 반환하도록 변경했습니다.
+```
+
+```text
+Request DTO는 클라이언트가 서버에 보내는 데이터 형식이고,
+Response DTO는 서버가 클라이언트에게 보여줄 응답 데이터 형식입니다.
+DTO를 사용하면 DB Entity 구조와 API 응답 구조를 분리할 수 있습니다.
+```
+
+## 다음 추천 작업
+
+1. `AttackEventController`의 불필요한 `AttackEvent` import 제거
+2. Postman에서 `GET /api/attacks`, `GET /api/attacks/{id}` 응답 확인
+3. `AttackEventService.createAttackEvent()` 테스트 작성
+4. `Facility`, `Person`, `Vehicle` 조회 API도 Response DTO로 변경
+5. `ErrorResponseDto`로 예외 응답 구조 통일
+6. DB 설정에서 비밀번호 제거
+7. README와 깨진 한글 정리
+8. 배포 준비
+
 힌트:
 
 - `facilityId`는 어떤 시설을 공격할지 찾기 위해 필요하다.
