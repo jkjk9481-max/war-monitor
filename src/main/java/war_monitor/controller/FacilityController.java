@@ -3,6 +3,7 @@ package war_monitor.controller;
 
 import org.springframework.web.bind.annotation.*;
 import war_monitor.dto.FacilityResponseDto;
+import war_monitor.dto.FacilityStatusUpdateRequest;
 import war_monitor.entity.Facility;
 import war_monitor.entity.FacilityStatus;
 import war_monitor.service.FacilityService;
@@ -32,7 +33,7 @@ public class FacilityController {
     }
 
     @PatchMapping("/{id}/status")
-    public FacilityResponseDto updateFacilityStatus(@PathVariable Long id, @RequestBody FacilityStatus status){
-        return facilityService.updateFacilityStatus(id, status);
+    public FacilityResponseDto updateFacilityStatus(@PathVariable Long id, @RequestBody FacilityStatusUpdateRequest request){
+        return facilityService.updateFacilityStatus(id, request.getStatus());
     }
 }

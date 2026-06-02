@@ -1,7 +1,8 @@
 package war_monitor.controller;
 
 import org.springframework.web.bind.annotation.*;
-import war_monitor.entity.Vehicle;
+import war_monitor.dto.VehicleResponseDto;
+import war_monitor.dto.VehicleStatusUpdateRequest;
 import war_monitor.entity.VehicleStatus;
 import war_monitor.service.VehicleService;
 
@@ -18,17 +19,17 @@ public class VehicleController {
     }
 
     @GetMapping
-    public List<Vehicle> getAllVehicles(){
+    public List<VehicleResponseDto> getAllVehicles() {
         return vehicleService.getAllVehicle();
     }
 
     @GetMapping("/{id}")
-    public Vehicle getVehicle(@PathVariable Long id){
+    public VehicleResponseDto getVehicle(@PathVariable Long id) {
         return vehicleService.getVehicleById(id);
     }
 
     @PatchMapping("/{id}/status")
-    public Vehicle updateVehiclesStatus(@PathVariable Long id , @RequestBody VehicleStatus status){
-        return vehicleService.updateVehicleStatus(id , status);
+    public VehicleResponseDto updateVehiclesStatus(@PathVariable Long id, @RequestBody VehicleStatusUpdateRequest request) {
+        return vehicleService.updateVehicleStatus(id, request.getVehicleStatus());
     }
 }

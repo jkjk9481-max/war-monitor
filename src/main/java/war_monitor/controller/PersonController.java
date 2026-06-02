@@ -1,8 +1,8 @@
 package war_monitor.controller;
 
-
 import org.springframework.web.bind.annotation.*;
-import war_monitor.entity.Person;
+import war_monitor.dto.PersonResponseDto;
+import war_monitor.dto.PersonStatusUpdateRequest;
 import war_monitor.entity.PersonStatus;
 import war_monitor.service.PersonService;
 
@@ -19,17 +19,17 @@ public class PersonController {
     }
 
     @GetMapping
-    public List<Person> getAllPersons(){
+    public List<PersonResponseDto> getAllPersons() {
         return personService.getAllPersons();
     }
 
     @GetMapping("/{id}")
-    public Person getPersonById(@PathVariable Long id){
+    public PersonResponseDto getPersonById(@PathVariable Long id) {
         return personService.getPersonById(id);
     }
 
     @PatchMapping("/{id}/status")
-    public Person updatePersonStatus(@PathVariable Long id, @RequestBody PersonStatus status){
-        return personService.updatePersonStatus(id , status);
+    public PersonResponseDto updatePersonStatus(@PathVariable Long id, @RequestBody PersonStatusUpdateRequest request) {
+        return personService.updatePersonStatus(id, request.getPersonStatus());
     }
 }
